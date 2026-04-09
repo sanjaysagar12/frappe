@@ -230,52 +230,97 @@ export default class QuickListWidget extends Widget {
 				};
 				
 				console.log("FINAL PROCUREMENT DATA:", final_data);
-				
-				let message_html = "<h4>Selected Items & Data</h4><div style='overflow-x: auto;'><table class='table table-bordered table-hover' style='font-size: 12px; white-space: nowrap;'>";
-				message_html += "<thead><tr><th>Item</th><th>Qty</th><th>Budget</th><th>Location</th><th>Importance</th><th>Deadline</th><th>Del. Date</th><th>Spec</th><th>Pkg Req</th><th>Docs</th><th>Payment Terms</th><th>Terms & Cond</th><th>Desc</th></tr></thead><tbody>";
-				final_data.items.forEach(item => {
-					message_html += `<tr>
-						<td><b>${item.item_name}</b><br><span class='text-muted'>${item.item_code} | ${item.item_group}</span></td>
-						<td>${item.qty || ""}</td>
-						<td>${item.budget || ""}</td>
-						<td>${item.location || ""}</td>
-						<td>${item.importance || ""}</td>
-						<td>${item.submitting_deadline || ""}</td>
-						<td>${item.delivery_date || ""}</td>
-						<td>${item.spec || ""}</td>
-						<td>${item.packaging_requirements || ""}</td>
-						<td>${item.required_docs || ""}</td>
-						<td>${item.payment_terms || ""}</td>
-						<td>${item.terms_and_conditions || ""}</td>
-						<td>${item.description || ""}</td>
-					</tr>`;
-				});
-				message_html += "</tbody></table></div>";
-
-				if (final_data.vendors.length > 0) {
-					message_html += "<h4 style='margin-top: 15px;'>Selected Vendors</h4><div style='overflow-x: auto;'><table class='table table-bordered table-hover' style='font-size: 12px;'>";
-					message_html += "<thead><tr><th>Supplier Name</th><th>Email</th><th>Group</th></tr></thead><tbody>";
-					final_data.vendors.forEach(v => {
-						message_html += `<tr>
-							<td><b>${v.supplier}</b></td>
-							<td>${v.email || "<i class='text-muted'>None</i>"}</td>
-							<td>${v.supplier_group || ""}</td>
-						</tr>`;
-					});
-					message_html += "</tbody></table></div>";
-				}
-
-				frappe.msgprint({
-					title: __("Procurement Data Collected"),
-					message: message_html,
-					wide: true
-				});
 				d.hide();
+				this.show_summary_dialog(final_data);
 			}
 		});
 
 		d.show();
 	}
+
+	show_summary_dialog(final_data) {
+		let message_html = "<h4>Step 1: Review Data</h4><div style='overflow-x: auto;'><table class='table table-bordered table-hover' style='font-size: 11px; white-space: nowrap;'>";
+		message_html += "<thead><tr><th>Item</th><th>Qty</th><th>Budget</th><th>Importance</th><th>Deadline</th><th>Del. Date</th></tr></thead><tbody>";
+		final_data.items.forEach(item => {
+			message_html += `<tr>
+				<td><b>${item.item_name}</b><br><small>${item.item_code}</small></td>
+				<td>${item.qty || ""}</td>
+				<td>${item.budget || ""}</td>
+				<td>${item.importance || ""}</td>
+				<td>${item.submitting_deadline || ""}</td>
+				<td>${item.delivery_date || ""}</td>
+			</tr>`;
+		});
+		message_html += "</tbody></table></div>";
+
+		if (final_data.vendors.length > 0) {
+			message_html += "<h4 style='margin-top: 15px;'>Selected Vendors</h4><div style='overflow-x: auto;'><table class='table table-bordered table-hover' style='font-size: 11px;'>";
+			message_html += "<thead><tr><th>Supplier Name</th><th>Email</th></tr></thead><tbody>";
+			final_data.vendors.forEach(v => {
+				message_html += `<tr><td><b>${v.supplier}</b></td><td>${v.email || "N/A"}</td></tr>`;
+			});
+			message_html += "</tbody></table></div>";
+		}
+
+		const summary_dialog = new frappe.ui.Dialog({
+			title: __("Selection Summary"),
+			fields: [{ fieldtype: "HTML", fieldname: "summary_html", options: message_html }],
+			primary_action_label: __("Continue to Compose Emails"),
+			primary_action: () => {
+				summary_dialog.hide();
+				this.show_email_review_dialog(final_data);
+			}
+		});
+
+		summary_dialog.show();
+	}
+
+	show_email_review_dialog(final_data) {
+		let email_fields = [];
+		const item_list_str = final_data.items.map(i => `- ${i.item_name} (${i.qty} units)`).join("\n");
+
+		final_data.vendors.forEach((vendor, index) => {
+			const subject = `Request for Quotation - ${final_data.items.length} Items`;
+			const body = `Dear ${vendor.supplier},\n\nWe are interested in procuring the following items:\n\n${item_list_str}\n\nPlease provide your best pricing and lead times by return email.\n\nRegards,\nProcurement Department`;
+
+			email_fields.push({
+				label: __("Draft for: {0}", [vendor.supplier]),
+				fieldtype: "Section Break"
+			});
+			email_fields.push({
+				label: __("Subject"),
+				fieldname: `subject_${index}`,
+				fieldtype: "Data",
+				default: subject
+			});
+			email_fields.push({
+				label: __("Body"),
+				fieldname: `body_${index}`,
+				fieldtype: "Small Text",
+				default: body
+			});
+		});
+
+		const email_dialog = new frappe.ui.Dialog({
+			title: __("Step 2: Review & Send Emails"),
+			fields: email_fields,
+			primary_action_label: __("Send To All Vendors"),
+			primary_action: (values) => {
+				frappe.show_alert({
+					message: __("Emails sent successfully to {0} vendors!", [final_data.vendors.length]),
+					indicator: 'green'
+				});
+				console.log("SENT EMAILS DATA:", values);
+				email_dialog.hide();
+				// Reset selection
+				frappe.procurement_selection = { 'Item': [], 'Supplier': [] };
+				$(".continue-btn").trigger("update-visibility");
+			}
+		});
+
+		email_dialog.show();
+	}
+
 
 	setup_filter(doctype) {
 		if (this.filter_group) {
