@@ -240,15 +240,22 @@ export default class QuickListWidget extends Widget {
 
 	show_summary_dialog(final_data) {
 		let message_html = "<h4>Step 1: Review Data</h4><div style='overflow-x: auto;'><table class='table table-bordered table-hover' style='font-size: 11px; white-space: nowrap;'>";
-		message_html += "<thead><tr><th>Item</th><th>Qty</th><th>Budget</th><th>Importance</th><th>Deadline</th><th>Del. Date</th></tr></thead><tbody>";
+		message_html += "<thead><tr><th>Item</th><th>Qty</th><th>Budget</th><th>Location</th><th>Importance</th><th>Deadline</th><th>Del. Date</th><th>Spec</th><th>Pkg Req</th><th>Docs</th><th>Payment Terms</th><th>Terms & Cond</th><th>Desc</th></tr></thead><tbody>";
 		final_data.items.forEach(item => {
 			message_html += `<tr>
 				<td><b>${item.item_name}</b><br><small>${item.item_code}</small></td>
 				<td>${item.qty || ""}</td>
 				<td>${item.budget || ""}</td>
+				<td>${item.location || ""}</td>
 				<td>${item.importance || ""}</td>
 				<td>${item.submitting_deadline || ""}</td>
 				<td>${item.delivery_date || ""}</td>
+				<td>${item.spec || ""}</td>
+				<td>${item.packaging_requirements || ""}</td>
+				<td>${item.required_docs || ""}</td>
+				<td>${item.payment_terms || ""}</td>
+				<td>${item.terms_and_conditions || ""}</td>
+				<td>${item.description || ""}</td>
 			</tr>`;
 		});
 		message_html += "</tbody></table></div>";
@@ -276,28 +283,67 @@ export default class QuickListWidget extends Widget {
 	}
 
 	show_email_review_dialog(final_data) {
-		let email_fields = [];
-		const item_list_str = final_data.items.map(i => `- ${i.item_name} (${i.qty} units)`).join("\n");
+		frappe.call({
+			method: "frappe.utils.procurement.generate_rfq_drafts",
+			args: { final_data },
+			freeze: true,
+			freeze_message: __("Generating drafts..."),
+			callback: (r) => {
+				const drafts = r.message?.drafts || [];
+				if (!drafts.length) {
+					frappe.msgprint({
+						title: __("Draft generation failed"),
+						message: __("No drafts were returned. Please try again."),
+						indicator: "red"
+					});
+					return;
+				}
+				this.open_email_review_dialog(final_data, drafts);
+			},
+			error: () => {
+				frappe.msgprint({
+					title: __("Draft generation failed"),
+					message: __("Unable to generate drafts. Please try again."),
+					indicator: "red"
+				});
+			}
+		});
+	}
 
-		final_data.vendors.forEach((vendor, index) => {
+	get_fallback_rfq_drafts(final_data) {
+		const item_list_str = final_data.items.map(i => `- ${i.item_name} (${i.qty} units)`).join("\n");
+		return final_data.vendors.map((vendor) => {
 			const subject = `Request for Quotation - ${final_data.items.length} Items`;
 			const body = `Dear ${vendor.supplier},\n\nWe are interested in procuring the following items:\n\n${item_list_str}\n\nPlease provide your best pricing and lead times by return email.\n\nRegards,\nProcurement Department`;
 
+			return {
+				supplier: vendor.supplier,
+				email: vendor.email,
+				subject,
+				body
+			};
+		});
+	}
+
+	open_email_review_dialog(final_data, drafts) {
+		let email_fields = [];
+
+		drafts.forEach((draft, index) => {
 			email_fields.push({
-				label: __("Draft for: {0}", [vendor.supplier]),
+				label: __("Draft for: {0}", [draft.supplier || __("Supplier")]),
 				fieldtype: "Section Break"
 			});
 			email_fields.push({
 				label: __("Subject"),
 				fieldname: `subject_${index}`,
 				fieldtype: "Data",
-				default: subject
+				default: draft.subject
 			});
 			email_fields.push({
 				label: __("Body"),
 				fieldname: `body_${index}`,
 				fieldtype: "Small Text",
-				default: body
+				default: draft.body
 			});
 		});
 
@@ -306,19 +352,128 @@ export default class QuickListWidget extends Widget {
 			fields: email_fields,
 			primary_action_label: __("Send To All Vendors"),
 			primary_action: (values) => {
-				frappe.show_alert({
-					message: __("Emails sent successfully to {0} vendors!", [final_data.vendors.length]),
-					indicator: 'green'
+				const emails = drafts.map((draft, index) => ({
+					supplier: draft.supplier,
+					email: draft.email,
+					subject: values[`subject_${index}`],
+					body: values[`body_${index}`]
+				}));
+
+				frappe.call({
+					method: "frappe.utils.procurement.send_rfq_emails",
+					args: { emails, items: final_data.items || [] },
+					freeze: true,
+					freeze_message: __("Sending emails..."),
+					callback: (r) => {
+						const sent = r.message?.sent || [];
+						const failed = r.message?.failed || [];
+
+						if (sent.length) {
+							frappe.show_alert({
+								message: __("Emails sent successfully to {0} vendors!", [sent.length]),
+								indicator: "green"
+							});
+							// Reset selection
+							frappe.procurement_selection = { 'Item': [], 'Supplier': [] };
+							$(".continue-btn").trigger("update-visibility");
+						}
+
+						if (failed.length) {
+							const failed_list = failed
+								.map((f) => `<li>${frappe.utils.escape_html(f.supplier || "")}: ${frappe.utils.escape_html(f.email || "")}</li>`)
+								.join("");
+							frappe.msgprint({
+								title: __("Some emails failed"),
+								message: `<ul>${failed_list}</ul>`,
+								indicator: "orange"
+							});
+						}
+
+						email_dialog.hide();
+						this.render_email_logs();
+					},
+					error: () => {
+						frappe.msgprint({
+							title: __("Email send failed"),
+							message: __("Unable to send emails. Please check your SMTP settings."),
+							indicator: "red"
+						});
+					}
 				});
-				console.log("SENT EMAILS DATA:", values);
-				email_dialog.hide();
-				// Reset selection
-				frappe.procurement_selection = { 'Item': [], 'Supplier': [] };
-				$(".continue-btn").trigger("update-visibility");
 			}
 		});
 
 		email_dialog.show();
+	}
+
+	render_email_logs() {
+		if (this.document_type !== "Supplier") return;
+
+		if (this.email_log_container) {
+			this.email_log_container.remove();
+		}
+
+		this.email_log_container = $(
+			`<div class="email-log-section" style="margin-top: 12px;">
+				<div style="font-weight: 600; margin-bottom: 6px;">${__("Email Logs")}</div>
+				<div class="email-log-content text-muted">${__("Loading logs...")}</div>
+			</div>`
+		);
+
+		this.email_log_container.appendTo(this.body);
+
+		frappe.call({
+			method: "frappe.utils.procurement.get_rfq_email_logs",
+			args: { limit: 50 },
+			callback: (r) => {
+				const logs = (r.message?.logs || []).slice().reverse();
+				const $content = this.email_log_container.find(".email-log-content");
+
+				if (!logs.length) {
+					$content.text(__("No email logs yet."));
+					return;
+				}
+
+				let rows = logs.map((log) => {
+					const supplier = frappe.utils.escape_html(log.supplier || "");
+					const email = frappe.utils.escape_html(log.email || "");
+					const subject = frappe.utils.escape_html(log.subject || "");
+					const status = frappe.utils.escape_html(log.status || "");
+					const timestamp = frappe.utils.escape_html(log.timestamp || "");
+					const item_count = Array.isArray(log.items) ? log.items.length : 0;
+					return `<tr>
+						<td>${timestamp}</td>
+						<td>${supplier}</td>
+						<td>${email}</td>
+						<td>${subject}</td>
+						<td>${item_count}</td>
+						<td>${status}</td>
+					</tr>`;
+				}).join("");
+
+				$content.html(
+					`<div style="overflow-x: auto;">
+						<table class="table table-bordered table-hover" style="font-size: 11px;">
+							<thead>
+								<tr>
+									<th>${__("Time")}</th>
+									<th>${__("Supplier")}</th>
+									<th>${__("Email")}</th>
+									<th>${__("Subject")}</th>
+									<th>${__("Items")}</th>
+									<th>${__("Status")}</th>
+								</tr>
+							</thead>
+							<tbody>${rows}</tbody>
+						</table>
+					</div>`
+				);
+			},
+			error: () => {
+				const $content = this.email_log_container.find(".email-log-content");
+				$content.text(__("Unable to load logs."));
+			}
+		});
 	}
 
 
@@ -516,6 +671,7 @@ export default class QuickListWidget extends Widget {
 
 				if (!data.length) {
 					this.render_no_data_state();
+					this.render_email_logs();
 					return;
 				}
 
@@ -528,6 +684,7 @@ export default class QuickListWidget extends Widget {
 				this.quick_list.forEach(($quick_list_item) =>
 					$quick_list_item.appendTo(this.body)
 				);
+				this.render_email_logs();
 			});
 		});
 	}
