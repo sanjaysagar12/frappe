@@ -6,6 +6,16 @@ export default class QuickListWidget extends Widget {
 	constructor(opts) {
 		opts.shadow = true;
 		super(opts);
+		if (!frappe.procurement_selection) {
+			frappe.procurement_selection = {
+				'Item': [],
+				'Supplier': []
+			};
+			frappe.procurement_cache = {
+				'Item': {},
+				'Supplier': {}
+			};
+		}
 	}
 
 	get_config() {
@@ -24,6 +34,7 @@ export default class QuickListWidget extends Widget {
 		}
 		this.setup_refresh_list_button();
 		this.setup_filter_list_button();
+		this.setup_continue_button();
 	}
 
 	setup_add_new_button() {
@@ -70,6 +81,200 @@ export default class QuickListWidget extends Widget {
 
 		this.filter_list.appendTo(this.action_area);
 		this.filter_list.on("click", () => this.setup_filter_dialog());
+	}
+
+	setup_bulk_action_button() {
+		// Placeholder for backward compatibility if needed, though removed logic
+	}
+
+	setup_continue_button() {
+		this.continue_btn = $(
+			`<div class="continue-btn btn btn-xs btn-primary pull-right hidden" style="margin-right: 5px;">
+				${__("Continue")}
+			</div>`
+		);
+
+		this.continue_btn.appendTo(this.action_area);
+		this.continue_btn.on("click", () => {
+			this.show_procurement_dialog();
+		});
+	}
+
+	show_procurement_dialog() {
+		const selected_items = frappe.procurement_selection['Item'] || [];
+		const selected_vendors = frappe.procurement_selection['Supplier'] || [];
+		
+		if (selected_items.length === 0) {
+			frappe.msgprint(__("Please select at least one Item."));
+			return;
+		}
+
+		let fields = [];
+		selected_items.forEach((item_id, index) => {
+			const cache = frappe.procurement_cache['Item'][item_id] || {};
+			const item_name = cache.item_name || item_id;
+
+			fields.push({
+				label: __("Item: {0}", [item_name]),
+				fieldtype: "Section Break",
+			});
+
+			// Column 1
+			fields.push({
+				label: __("Quantity"),
+				fieldname: `qty_${index}`,
+				fieldtype: "Float",
+				default: 1.0,
+				reqd: 1
+			});
+			fields.push({
+				label: __("Budget"),
+				fieldname: `budget_${index}`,
+				fieldtype: "Currency"
+			});
+			fields.push({
+				label: __("Location"),
+				fieldname: `location_${index}`,
+				fieldtype: "Data"
+			});
+			fields.push({
+				label: __("Importance"),
+				fieldname: `importance_${index}`,
+				fieldtype: "Select",
+				options: "Low\nMedium\nHigh\nUrgent",
+				default: "Medium"
+			});
+			fields.push({
+				label: __("Submitting Deadline"),
+				fieldname: `deadline_${index}`,
+				fieldtype: "Date"
+			});
+			fields.push({
+				label: __("Description"),
+				fieldname: `desc_${index}`,
+				fieldtype: "Small Text"
+			});
+
+			// Column 2
+			fields.push({
+				fieldtype: "Column Break"
+			});
+			fields.push({
+				label: __("Delivery Date"),
+				fieldname: `date_${index}`,
+				fieldtype: "Date",
+				default: frappe.datetime.nowdate(),
+				reqd: 1
+			});
+			fields.push({
+				label: __("Spec"),
+				fieldname: `spec_${index}`,
+				fieldtype: "Data"
+			});
+			fields.push({
+				label: __("Packaging Requirements"),
+				fieldname: `packaging_${index}`,
+				fieldtype: "Data"
+			});
+			fields.push({
+				label: __("Required Docs"),
+				fieldname: `docs_${index}`,
+				fieldtype: "Data"
+			});
+			fields.push({
+				label: __("Payment Terms"),
+				fieldname: `payment_${index}`,
+				fieldtype: "Data"
+			});
+			fields.push({
+				label: __("Terms and Conditions"),
+				fieldname: `terms_${index}`,
+				fieldtype: "Small Text"
+			});
+		});
+
+		const d = new frappe.ui.Dialog({
+			title: __("Procurement Details"),
+			fields: fields,
+			primary_action_label: __("Submit"),
+			primary_action: (values) => {
+				const final_data = {
+					items: selected_items.map((id, i) => {
+						const cache = frappe.procurement_cache['Item'][id] || {};
+						return {
+							item_code: id,
+							item_name: cache.item_name || id,
+							item_group: cache.item_group || "",
+							qty: values[`qty_${i}`],
+							budget: values[`budget_${i}`],
+							location: values[`location_${i}`],
+							importance: values[`importance_${i}`],
+							submitting_deadline: values[`deadline_${i}`],
+							delivery_date: values[`date_${i}`],
+							spec: values[`spec_${i}`],
+							packaging_requirements: values[`packaging_${i}`],
+							required_docs: values[`docs_${i}`],
+							payment_terms: values[`payment_${i}`],
+							terms_and_conditions: values[`terms_${i}`],
+							description: values[`desc_${i}`]
+						};
+					}),
+					vendors: selected_vendors.map(id => {
+						const cache = frappe.procurement_cache['Supplier'][id] || {};
+						return {
+							supplier: id,
+							email: cache.email_id || "",
+							supplier_group: cache.supplier_group || ""
+						};
+					})
+				};
+				
+				console.log("FINAL PROCUREMENT DATA:", final_data);
+				
+				let message_html = "<h4>Selected Items & Data</h4><div style='overflow-x: auto;'><table class='table table-bordered table-hover' style='font-size: 12px; white-space: nowrap;'>";
+				message_html += "<thead><tr><th>Item</th><th>Qty</th><th>Budget</th><th>Location</th><th>Importance</th><th>Deadline</th><th>Del. Date</th><th>Spec</th><th>Pkg Req</th><th>Docs</th><th>Payment Terms</th><th>Terms & Cond</th><th>Desc</th></tr></thead><tbody>";
+				final_data.items.forEach(item => {
+					message_html += `<tr>
+						<td><b>${item.item_name}</b><br><span class='text-muted'>${item.item_code} | ${item.item_group}</span></td>
+						<td>${item.qty || ""}</td>
+						<td>${item.budget || ""}</td>
+						<td>${item.location || ""}</td>
+						<td>${item.importance || ""}</td>
+						<td>${item.submitting_deadline || ""}</td>
+						<td>${item.delivery_date || ""}</td>
+						<td>${item.spec || ""}</td>
+						<td>${item.packaging_requirements || ""}</td>
+						<td>${item.required_docs || ""}</td>
+						<td>${item.payment_terms || ""}</td>
+						<td>${item.terms_and_conditions || ""}</td>
+						<td>${item.description || ""}</td>
+					</tr>`;
+				});
+				message_html += "</tbody></table></div>";
+
+				if (final_data.vendors.length > 0) {
+					message_html += "<h4 style='margin-top: 15px;'>Selected Vendors</h4><div style='overflow-x: auto;'><table class='table table-bordered table-hover' style='font-size: 12px;'>";
+					message_html += "<thead><tr><th>Supplier Name</th><th>Email</th><th>Group</th></tr></thead><tbody>";
+					final_data.vendors.forEach(v => {
+						message_html += `<tr>
+							<td><b>${v.supplier}</b></td>
+							<td>${v.email || "<i class='text-muted'>None</i>"}</td>
+							<td>${v.supplier_group || ""}</td>
+						</tr>`;
+					});
+					message_html += "</tbody></table></div>";
+				}
+
+				frappe.msgprint({
+					title: __("Procurement Data Collected"),
+					message: message_html,
+					wide: true
+				});
+				d.hide();
+			}
+		});
+
+		d.show();
 	}
 
 	setup_filter(doctype) {
@@ -138,14 +343,19 @@ export default class QuickListWidget extends Widget {
 		const indicator = frappe.get_indicator(doc, this.document_type);
 
 		let $quick_list_item = $(`
-			<div class="quick-list-item">
-				<div class="ellipsis left">
+			<div class="quick-list-item" style="display: flex; align-items: center; padding: 10px; border-bottom: 1px solid var(--border-color); cursor: pointer;">
+				<input type="checkbox" class="quick-list-checkbox" style="margin-right: 12px; cursor: pointer; width: 16px; height: 16px;">
+				<div class="ellipsis left" style="flex: 1;">
 					<div class="ellipsis title"
+						style="font-weight: 500;"
 						title="${strip_html(doc[this.title_field_name])}">
 						${strip_html(doc[this.title_field_name])}
 					</div>
-					<div class="timestamp text-muted">
+					<div class="timestamp text-muted" style="font-size: var(--text-xs);">
 						${frappe.datetime.prettyDate(doc.modified)}
+					</div>
+					<div class="extra-info text-muted" style="font-size: var(--text-xs); margin-top: 2px;">
+						${this.get_extra_info(doc)}
 					</div>
 				</div>
 			</div>
@@ -153,18 +363,39 @@ export default class QuickListWidget extends Widget {
 
 		if (indicator) {
 			$(`
-				<div class="status indicator-pill ${indicator[1]} ellipsis">
+				<div class="status indicator-pill ${indicator[1]} ellipsis" style="margin-left: 10px;">
 					${indicator[0]}
 				</div>
 			`).appendTo($quick_list_item);
 		}
-		let icon_to_append = `<div class="right-arrow">${frappe.utils.icon("right", "xs")}</div>`;
+		let icon_to_append = `<div class="right-arrow" style="margin-left: 10px;">${frappe.utils.icon("right", "xs")}</div>`;
 		if (frappe.utils.is_rtl(frappe.boot.lang)) {
-			icon_to_append = `<div class="left-arrow">${frappe.utils.icon("left", "xs")}</div>`;
+			icon_to_append = `<div class="left-arrow" style="margin-right: 10px;">${frappe.utils.icon("left", "xs")}</div>`;
 		}
 		$(icon_to_append).appendTo($quick_list_item);
 
-		$quick_list_item.click((e) => {
+		const $checkbox = $quick_list_item.find(".quick-list-checkbox");
+		
+		$checkbox.on("click", (e) => {
+			e.stopPropagation();
+			const checked = $checkbox.prop("checked");
+			const type = this.document_type === "Supplier" ? "Supplier" : "Item";
+			
+			if (checked) {
+				if (!frappe.procurement_selection[type].includes(doc.name)) {
+					frappe.procurement_selection[type].push(doc.name);
+				}
+			} else {
+				frappe.procurement_selection[type] = frappe.procurement_selection[type].filter(id => id !== doc.name);
+			}
+			$(".continue-btn").trigger("update-visibility");
+		});
+
+		// Add listener for global visibility update
+		this.continue_btn.on("update-visibility", () => this.update_continue_visibility());
+
+		$quick_list_item.on("click", (e) => {
+			if ($(e.target).hasClass("quick-list-checkbox")) return;
 			if (e.ctrlKey || e.metaKey) {
 				frappe.open_in_new_tab = true;
 			}
@@ -204,6 +435,13 @@ export default class QuickListWidget extends Widget {
 			workflow_fieldname && fields.push(workflow_fieldname);
 			fields.push("modified");
 
+			if (this.document_type === "Supplier") {
+				fields.push("email_id");
+				fields.push("supplier_group");
+			} else if (this.document_type === "Item") {
+				fields.push("item_group");
+			}
+
 			let add_fields = frappe.listview_settings?.[this.document_type]?.add_fields;
 			if (Array.isArray(add_fields)) {
 				fields.push(...add_fields);
@@ -220,7 +458,7 @@ export default class QuickListWidget extends Widget {
 					filters: quick_list_filter,
 					order_by: "modified desc",
 					start: 0,
-					page_length: 4,
+					page_length: 50,
 				},
 			};
 
@@ -235,6 +473,11 @@ export default class QuickListWidget extends Widget {
 					this.render_no_data_state();
 					return;
 				}
+
+				// Cache the full data for the wizard
+				data.forEach(d => {
+					frappe.procurement_cache[this.document_type][d.name] = d;
+				});
 
 				this.quick_list = data.map((doc) => this.setup_quick_list_item(doc));
 				this.quick_list.forEach(($quick_list_item) =>
@@ -262,5 +505,29 @@ export default class QuickListWidget extends Widget {
 			}
 			frappe.set_route(route);
 		});
+	}
+
+	update_continue_visibility() {
+		const item_count = (frappe.procurement_selection['Item'] || []).length;
+		const vendor_count = (frappe.procurement_selection['Supplier'] || []).length;
+		const total = item_count + vendor_count;
+
+		if (total > 0) {
+			this.continue_btn.removeClass("hidden");
+			this.continue_btn.text(`${__("Continue")} (${total})`);
+		} else {
+			this.continue_btn.addClass("hidden");
+		}
+	}
+
+	get_extra_info(doc) {
+		let info = [];
+		if (this.document_type === "Supplier") {
+			if (doc.email_id) info.push(doc.email_id);
+			if (doc.supplier_group) info.push(`Group: ${doc.supplier_group}`);
+		} else if (this.document_type === "Item") {
+			if (doc.item_group) info.push(`Group: ${doc.item_group}`);
+		}
+		return info.join(" | ");
 	}
 }
